@@ -15,4 +15,4 @@ input=$1
 # Update this file with instructions on how to run your code given an input
 # java -cp src/ solver.sat.Main $input
 
-PYTHONPATH=src python3 -m solver.sat.main $input
+PYTHONPATH=src python3 -m main $input
