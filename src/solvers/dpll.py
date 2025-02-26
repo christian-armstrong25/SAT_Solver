@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional, Set
+from typing import List, Tuple, Optional, Set, Dict
 import random
 
 class Solver(ABC):
@@ -22,98 +22,101 @@ class DPLL(Solver):
         if not cnf:  
             return True, []
         
-        assignment = []
-        
-        return self._dpll_recursive(cnf, assignment, None)
+        assignment = {}
+        return self._dpll_recursive(cnf, assignment)
     
-    def _dpll_recursive(self, clauses: List[Set[int]], assignment: List[int], literal: int | None) -> Tuple[bool, Optional[List[int]]]:
-        if literal is not None:
-            assignment.append(literal)
-            if not self._simplify_clauses(clauses, literal):
+    def _dpll_recursive(self, clauses: List[Set[int]], assignment: Dict[int, bool]) -> Tuple[bool, Optional[Dict[int, bool]]]:
+        # Keep doing inference steps until no more changes
+        changes_made = True
+        
+        # Try unit propagation
+        while changes_made:
+            changes_made = False
+
+            # Check termination conditions
+            if not clauses:
+                return True, assignment
+            if any(not clause for clause in clauses):
                 return False, None
             
-        # Unit propagation
-        if not self._unit_propagation(clauses, assignment):
-            return False, None
-        
-        # Pure literal elimination
-        self._pure_literal_elimination(clauses, assignment)
-
-        # NOTE: this is working right now, but I think we should have pure and unit call dpll recursive when done
-        # Or loop until no more changes
-        # I think right now we will branch when we dont have to when pure literal elimination is
-        # creating a unit clause
-        
-        if not clauses: 
-            return True, assignment
-        if any(not clause for clause in clauses):  
-            return False, None
+            # Unit propagation                
+            unit = self._find_unit_clause(clauses)
+            if unit:
+                assignment[unit] = True
+                self._simplify_clauses(clauses, unit)
+                changes_made = True
+                continue
             
-        # Choose branching literal
-        # TODO: we can add heuristics here
-        if not clauses:
-            return True, assignment
-            
-        # Try both branches
-        lit = next(iter(clauses[0]))
 
-        # Positive branch
+            # Pure literal elimination
+            pure = self._find_pure_literal(clauses)
+            if pure:
+                assignment[pure] = True
+                self._simplify_clauses(clauses, pure)
+                changes_made = True
+                continue
+          
+            
+        # Choose branching literal (from shortest clause)
+        lit = next(iter(min(clauses, key=len)))
+        
+        # Try positive branch
         clauses_copy = [clause.copy() for clause in clauses]
-        is_sat, ret_assignment = self._dpll_recursive(clauses_copy, assignment.copy(), lit)
+        assignment_copy = assignment.copy()
+        assignment_copy[lit] = True
+        self._simplify_clauses(clauses_copy, lit)
+
+        is_sat, ret_assignment = self._dpll_recursive(clauses_copy, assignment_copy)
         if is_sat:
-            return is_sat, ret_assignment
-        
-        # Negative branch
+            return True, ret_assignment
+            
+            
+        # Try negative branch
         clauses_copy = [clause.copy() for clause in clauses]
-        return self._dpll_recursive(clauses_copy, assignment.copy(), -lit)
+        assignment_copy = assignment.copy()
+        assignment_copy[lit] = False
+        self._simplify_clauses(clauses_copy, lit)
+
+        is_sat, ret_assignment = self._dpll_recursive(clauses_copy, assignment_copy)
+        if is_sat:
+            return True, ret_assignment
+            
+        return False, None
     
-    def _unit_propagation(self, clauses: List[Set[int]], assignment: List[int]) -> bool:
-        """Performs unit propagation. Returns False if contradiction found."""
-        changed = True
-        while changed and clauses:
-            changed = False
-            unit_clauses = [c for c in clauses if len(c) == 1]
-            if not unit_clauses:
-                break
-                
-            for clause in unit_clauses:
-                unit = next(iter(clause))
-                assignment.append(unit)
-                if not self._simplify_clauses(clauses, unit):
-                    return False
-                changed = True
-                
-        return True
+    def _find_unit_clause(self, clauses: List[Set[int]]) -> Optional[int]:
+        """Returns a unit literal if one exists, None otherwise."""
+        for clause in clauses:
+            if len(clause) == 1:
+                return next(iter(clause))
+        return None
     
-    def _pure_literal_elimination(self, clauses: List[Set[int]], assignment: List[int]) -> None:
-        """Performs pure literal elimination"""
+    def _find_pure_literal(self, clauses: List[Set[int]]) -> Optional[int]:
+        """Returns a pure literal if one exists, None otherwise."""
         if not clauses:
-            return
+            return None
             
         # Get all literals
         all_literals = set()
         for clause in clauses:
             all_literals.update(clause)
             
-        # Find pure literals
-        pure_lits = {lit for lit in all_literals if -lit not in all_literals}
-        
-        # Apply pure literals
-        for lit in pure_lits:
-            assignment.append(lit)
-            self._simplify_clauses(clauses, lit)
+        # Find first pure literal
+        for lit in all_literals:
+            if -lit not in all_literals:
+                return lit
+        return None
     
-    def _simplify_clauses(self, clauses: List[Set[int]], literal: int) -> bool:
-        """Simplifies clauses with the given literal. Removes clauses that are satisfied and removes negative literal from clauses. Returns False if contradiction found."""
+    def _simplify_clauses(self, clauses: List[Set[int]], literal: int) -> None:
+        """Simplifies clauses with the given literal. Returns False if contradiction found."""
         i = 0
         while i < len(clauses):
             if literal in clauses[i]:
                 clauses.pop(i)
             elif -literal in clauses[i]:
                 clauses[i].remove(-literal)
-                if not clauses[i]:
-                    return False
+                if not clauses[i]:  # Empty clause
+                    return
                 i += 1
             else:
                 i += 1
-        return True
+        return
