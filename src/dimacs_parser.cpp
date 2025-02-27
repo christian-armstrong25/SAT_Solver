@@ -1,4 +1,3 @@
-#include "dimacs_parser.h"
 #include <fstream>
 #include <sstream>
 #include <string>

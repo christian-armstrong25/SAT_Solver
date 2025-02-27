@@ -1,217 +1,212 @@
-#include "dpll.h"
 #include <algorithm>
-#include <cmath>
+#include <vector>
+#include <unordered_map>
 
-std::pair<bool, std::vector<int>> DPLL::solve(const std::vector<std::vector<int>>& cnf) {
-    // Initialize the formula
-    Formula formula;
-    
-    // Count the number of variables
-    int max_var = 0;
-    for (const auto& clause : cnf) {
-        for (int lit : clause) {
-            max_var = std::max(max_var, std::abs(lit));
+#include "dpll.h"
+using Literal = int32_t;
+using Variable = uint32_t;
+
+DPLLSolver::DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses) {
+    clauses = input_clauses;
+
+    // Initialize variables
+    num_vars = 0;
+    for (const auto& clause : clauses) {
+        for (Literal literal : clause) {
+            Variable var = std::abs(literal);
+            num_vars = std::max(num_vars, var);
         }
     }
-    
-    // Initialize data structures
-    formula.clauses = cnf;
 
-    formula.literals.resize(max_var + 1, -1); // +1 because variables are 1-indexed
-    
-    formula.literal_frequency.resize(max_var + 1, 0);
-    formula.literal_polarity.resize(max_var + 1, 0);
-    for (const auto& clause : formula.clauses) {
-        for (int lit : clause) {
-            int var = std::abs(lit);
-            formula.literal_frequency[var]++;
-            
-            if (lit > 0) {
-                formula.literal_polarity[var]++;
+    assignment.resize(num_vars + 1, Value::UNDEF);
+    pos_occurrences.resize(num_vars + 1);
+    neg_occurrences.resize(num_vars + 1);
+
+    for (uint32_t i = 0; i < clauses.size(); ++i) {
+        for (Literal literal : clauses[i]) {
+            Variable var = std::abs(literal);
+            if (literal > 0) {
+                pos_occurrences[var].push_back(i);
             } else {
-                formula.literal_polarity[var]--;
+                neg_occurrences[var].push_back(i);
             }
         }
     }
-    
-    int result = dpll_recursive(formula);
-    
-    return (result == 2) ? prepare_result(formula, true) : prepare_result(formula, false);
+
+    num_decisions = 0;
+    num_propagations = 0;
 }
 
-int DPLL::unit_propagate(Formula& f) {
-    bool unit_clause_found = false;
-    
-    // Check SAT
-    if (f.clauses.empty()) {
-        return 1;
+std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
+    bool is_sat = dpll();
+    if (!is_sat) {
+        return {false, std::vector<Literal>()};
     }
     
-    do {
-        unit_clause_found = false;
+    std::vector<Literal> result;
+    for (Variable var = 1; var <= num_vars; ++var) {
+        if (assignment[var] != Value::UNDEF) {
+            result.push_back(assignment[var] == Value::TRUE ? var : -var);
+        }
+    }
+    return {true, result};
+}
+
+bool DPLLSolver::dpll() {
+    if (!unitPropagate()) {
+        return false;
+    }
+    
+    pureLiteralEliminate();
+    
+    if (allClausesSatisfied()) {
+        return true;
+    }
+    
+    Variable var = pickBranchVariable();
+    num_decisions++;
+    
+    assignment[var] = Value::TRUE;
+    if (dpll()) {
+        return true;
+    }
+    
+    assignment[var] = Value::FALSE;
+    if (dpll()) {
+        return true;
+    }
+    
+    assignment[var] = Value::UNDEF;
+    return false;
+}
+
+// Unit propagation
+bool DPLLSolver::unitPropagate() {
+    bool found = true;
+    while (found) {
+        found = false;
         
-        for (int i = 0; i < f.clauses.size(); i++) {
-            // Check UNSAT
-            if (f.clauses[i].empty()) {
-                return -1;
+        for (uint32_t i = 0; i < clauses.size(); ++i) {
+            // Skip satisfied clauses
+            if (isClauseSatisfied(i)) {
+                continue;
             }
             
-            if (f.clauses[i].size() == 1) {
-                int lit = f.clauses[i][0];
-                int var = std::abs(lit);
-                bool val = (lit > 0); 
+            // Check if it's a unit clause
+            int unassignedCount = 0;
+            Literal unassignedLit = 0;
+            
+            for (Literal lit : clauses[i]) {
+                Variable var = std::abs(lit);
                 
-                // Set the variable value (0 for true, 1 for false)
-                f.literals[var] = val ? 0 : 1;
-                
-                f.literal_frequency[var] = -1;
-                
-                // Apply this change to the formula
-                int transform_result = apply_transform(f, var);
-                if (transform_result != 0) {
-                    return transform_result;
+                if (assignment[var] == Value::UNDEF) {
+                    unassignedCount++;
+                    unassignedLit = lit;
+                } else if ((lit > 0 && assignment[var] == Value::TRUE) || 
+                          (lit < 0 && assignment[var] == Value::FALSE)) {
+                    // Literal is satisfied
+                    unassignedCount = -1; // Mark clause as satisfied
+                    break;
                 }
+            }
+            
+            if (unassignedCount == 0) {
+                // All literals are false -> conflict
+                return false;
+            } else if (unassignedCount == 1) {
+                // Unit clause found
+                Variable var = std::abs(unassignedLit);
+                Value val = (unassignedLit > 0) ? Value::TRUE : Value::FALSE;
                 
-                unit_clause_found = true;
+                assignment[var] = val;
+                num_propagations++;
+                found = true; // Continue propagating
+                break; // Restart the loop since assignments changed
+            }
+        }
+    }
+    
+    return true;
+}
+
+// Pure literal elimination
+void DPLLSolver::pureLiteralEliminate() {
+    for (Variable var = 1; var <= num_vars; ++var) {
+        if (assignment[var] != Value::UNDEF) {
+            continue; // Skip assigned variables
+        }
+        
+        bool appearsPositive = false;
+        bool appearsNegative = false;
+        
+        // Check positive occurrences
+        for (uint32_t clauseIdx : pos_occurrences[var]) {
+            if (!isClauseSatisfied(clauseIdx)) {
+                appearsPositive = true;
                 break;
             }
         }
-    } while (unit_clause_found);
-    
-    return 0;
+        
+        // Check negative occurrences
+        for (uint32_t clauseIdx : neg_occurrences[var]) {
+            if (!isClauseSatisfied(clauseIdx)) {
+                appearsNegative = true;
+                break;
+            }
+        }
+        
+        // If pure, assign it
+        if (appearsPositive && !appearsNegative) {
+            assignment[var] = Value::TRUE;
+        } else if (!appearsPositive && appearsNegative) {
+            assignment[var] = Value::FALSE;
+        }
+    }
 }
 
-int DPLL::apply_transform(Formula& f, int var) {
-    int value = f.literals[var]; // 0 for true, 1 for false
-    int lit_val = (value == 0) ? var : -var; // Positive if true, negative if false
-    
-    // For each clause
-    for (int i = 0; i < f.clauses.size(); i++) {
-        // For each literal in the clause
-        for (int j = 0; j < f.clauses[i].size(); j++) {
-            int lit = f.clauses[i][j];
-            
-            if (lit == lit_val) { 
-                // If the literal matches our assignment
-                // this clause is satisfied
-                f.clauses.erase(f.clauses.begin() + i);
-                i--; 
-                
-                // Check SAT
-                if (f.clauses.empty()) {
-                    return 1; 
+// Check if a clause is satisfied under the current assignment
+bool DPLLSolver::isClauseSatisfied(uint32_t clauseIdx) const {
+    for (Literal lit : clauses[clauseIdx]) {
+        Variable var = std::abs(lit);
+        if ((lit > 0 && assignment[var] == Value::TRUE) || 
+            (lit < 0 && assignment[var] == Value::FALSE)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if all clauses are satisfied
+bool DPLLSolver::allClausesSatisfied() const {
+    for (uint32_t i = 0; i < clauses.size(); ++i) {
+        if (!isClauseSatisfied(i)) {
+            // Check if clause has any unassigned variables
+            bool hasUnassigned = false;
+            for (Literal lit : clauses[i]) {
+                if (assignment[std::abs(lit)] == Value::UNDEF) {
+                    hasUnassigned = true;
+                    break;
                 }
-                break; 
-            } 
-            else if (std::abs(lit) == var) { 
-                // If it's the same variable but opposite polarity
-                // remove this literal from clause
-                f.clauses[i].erase(f.clauses[i].begin() + j);
-                j--; 
-                
-                // Check UNSAT
-                if (f.clauses[i].empty()) {
-                    return -1; 
-                }
-                break; 
+            }
+            if (!hasUnassigned) {
+                return false; // Clause is falsified
             }
         }
     }
-    
-    return 0;
+    return true;
 }
 
-int DPLL::dpll_recursive(Formula f) {
-    // Perform unit propagation
-    int result = unit_propagate(f);
-    
-    if (result == 1) { 
-        // SAT
-        return 2; 
-    } 
-    else if (result == -1) { 
-        // UNSAT
-        return 0; 
-    }
-    
-    // Find variable with maximum frequency to branch on
-    int max_freq = -1;
-    int max_var = -1;
-    
-    for (int i = 1; i < f.literal_frequency.size(); i++) {
-        if (f.literal_frequency[i] > max_freq) {
-            max_freq = f.literal_frequency[i];
-            max_var = i;
+// Simple heuristic to choose a variable
+Variable DPLLSolver::pickBranchVariable() {
+    // Find first unassigned variable
+    for (Variable var = 1; var <= num_vars; ++var) {
+        if (assignment[var] == Value::UNDEF) {
+            return var;
         }
     }
-    
-    // If no variables to branch on
-    if (max_var == -1) {
-        // Check SAT
-        if (f.clauses.empty()) {
-            return 2; 
-        }
-        // Otherwise, UNSAT
-        return 0; 
-    }
-    
-    // Branch on the chosen variable
-    // Try both values, do higher polarity first
-    for (int j = 0; j < 2; j++) {
-        Formula new_f = f; // This clones the formula
-        
-        // Saw this code online, very smart code. Looping through 0 and 1
-        // is highkey genius here.
-        // Takes higher polarity first, then other variable second
-        // Since j = 0 is true, j = 1 is false
-        int assignment;
-        if (new_f.literal_polarity[max_var] > 0) {
-            assignment = j;
-        } else {
-            assignment = (j + 1) % 2;
-        }
-        
-        new_f.literals[max_var] = assignment;
-        new_f.literal_frequency[max_var] = -1; 
-        
-        int transform_result = apply_transform(new_f, max_var);
-        
-        if (transform_result == 1) { 
-            // SAT
-            return 2; 
-        } 
-        else if (transform_result == -1) { 
-            // UNSAT
-            continue; 
-        }
-        
-        // Recursively continue DPLL
-        int dpll_result = dpll_recursive(new_f);
-        if (dpll_result == 2) { 
-            // SAT
-            return dpll_result; 
-        }
-    }
-    
-    // If we reach here, no assignment satisfies the formula in this branch
-    return 0; 
+    return 0; // Should not happen
 }
 
-std::pair<bool, std::vector<int>> DPLL::prepare_result(const Formula& f, bool is_sat) {
-    if (!is_sat) {
-        return {false, {}};
-    }
-    
-    std::vector<int> assignment;
-    for (int i = 1; i < f.literals.size(); i++) {
-        if (f.literals[i] != -1) {
-            assignment.push_back((f.literals[i] == 0) ? i : -i);
-        } else {
-            // Unassigned vars, but formula is SAT
-            // So we can set them arbitrarily to true
-            assignment.push_back(i);
-        }
-    }
-    
-    return {true, assignment};
-} 
+// Stats accessors
+uint32_t DPLLSolver::getNumDecisions() const { return num_decisions; }
+uint32_t DPLLSolver::getNumPropagations() const { return num_propagations; }
