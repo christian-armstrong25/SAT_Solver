@@ -69,8 +69,6 @@ int main(int argc, char* argv[]) {
         std::cout << "{\"Instance\": \"" << filename 
                   << "\", \"Time\": " << elapsed_seconds.count() 
                   << ", \"Result\": \"" << result << "\""
-                  << ", \"Decisions\": " << solver.getNumDecisions()
-                  << ", \"Propagations\": " << solver.getNumPropagations()
                   << solution_str << "}" << std::endl;
         
     } catch (const std::exception& e) {

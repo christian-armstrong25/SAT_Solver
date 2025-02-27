@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <vector>
 #include <unordered_map>
+#include <iostream>
 
 #include "dpll.h"
 using Literal = int32_t;
@@ -39,6 +40,7 @@ DPLLSolver::DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses) {
 
 std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
     bool is_sat = dpll();
+    std::cout << "is_sat: " << is_sat << std::endl;
     if (!is_sat) {
         return {false, std::vector<Literal>()};
     }
@@ -53,10 +55,14 @@ std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
 }
 
 bool DPLLSolver::dpll() {
+    // Save the current assignment state
+    std::vector<Value> saved_assignment = assignment;
+    
     if (!unitPropagate()) {
+        assignment = saved_assignment;  // Restore state
         return false;
     }
-    
+
     pureLiteralEliminate();
     
     if (allClausesSatisfied()) {
@@ -71,12 +77,15 @@ bool DPLLSolver::dpll() {
         return true;
     }
     
+    // Restore state before trying FALSE
+    assignment = saved_assignment;
     assignment[var] = Value::FALSE;
     if (dpll()) {
         return true;
     }
     
-    assignment[var] = Value::UNDEF;
+    // Restore state before returning
+    assignment = saved_assignment;
     return false;
 }
 
@@ -178,22 +187,27 @@ bool DPLLSolver::isClauseSatisfied(uint32_t clauseIdx) const {
 
 // Check if all clauses are satisfied
 bool DPLLSolver::allClausesSatisfied() const {
+    bool allSatisfied = true;
     for (uint32_t i = 0; i < clauses.size(); ++i) {
         if (!isClauseSatisfied(i)) {
             // Check if clause has any unassigned variables
             bool hasUnassigned = false;
             for (Literal lit : clauses[i]) {
-                if (assignment[std::abs(lit)] == Value::UNDEF) {
+                Variable var = std::abs(lit);
+                if (assignment[var] == Value::UNDEF) {
                     hasUnassigned = true;
                     break;
                 }
             }
+            
             if (!hasUnassigned) {
-                return false; // Clause is falsified
+                // Clause is falsified (all literals assigned and false)
+                return false;
             }
+            allSatisfied = false;  // Clause is not satisfied yet
         }
     }
-    return true;
+    return allSatisfied;  // Only true if all clauses are satisfied
 }
 
 // Simple heuristic to choose a variable
