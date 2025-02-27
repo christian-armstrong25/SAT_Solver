@@ -23,7 +23,15 @@ class DPLL(Solver):
             return True, []
         
         assignment = {}
-        return self._dpll_recursive(cnf, assignment)
+        result = self._dpll_recursive(cnf, assignment)
+        
+        if result[0]: # If SAT
+            # Dict to list
+            assignment_list = []
+            for var, val in result[1].items():
+                assignment_list.append(var if val else -var)
+            return True, assignment_list
+        return False, None
     
     def _dpll_recursive(self, clauses: List[Set[int]], assignment: Dict[int, bool]) -> Tuple[bool, Optional[Dict[int, bool]]]:
         # Keep doing inference steps until no more changes
@@ -42,16 +50,19 @@ class DPLL(Solver):
             # Unit propagation                
             unit = self._find_unit_clause(clauses)
             if unit:
-                assignment[unit] = True
+                var = abs(unit)  # Get the variable number
+                val = unit > 0   # True if positive, False if negative
+                assignment[var] = val
                 self._simplify_clauses(clauses, unit)
                 changes_made = True
                 continue
             
-
             # Pure literal elimination
             pure = self._find_pure_literal(clauses)
             if pure:
-                assignment[pure] = True
+                var = abs(pure)  # Get the variable number
+                val = pure > 0   # True if positive, False if negative
+                assignment[var] = val
                 self._simplify_clauses(clauses, pure)
                 changes_made = True
                 continue
@@ -59,12 +70,13 @@ class DPLL(Solver):
             
         # Choose branching literal (from shortest clause)
         lit = next(iter(min(clauses, key=len)))
+        var = abs(lit)  # Get the variable number
         
         # Try positive branch
         clauses_copy = [clause.copy() for clause in clauses]
         assignment_copy = assignment.copy()
-        assignment_copy[lit] = True
-        self._simplify_clauses(clauses_copy, lit)
+        assignment_copy[var] = True
+        self._simplify_clauses(clauses_copy, var)
 
         is_sat, ret_assignment = self._dpll_recursive(clauses_copy, assignment_copy)
         if is_sat:
@@ -74,8 +86,8 @@ class DPLL(Solver):
         # Try negative branch
         clauses_copy = [clause.copy() for clause in clauses]
         assignment_copy = assignment.copy()
-        assignment_copy[lit] = False
-        self._simplify_clauses(clauses_copy, lit)
+        assignment_copy[var] = False
+        self._simplify_clauses(clauses_copy, -var)
 
         is_sat, ret_assignment = self._dpll_recursive(clauses_copy, assignment_copy)
         if is_sat:
