@@ -131,6 +131,13 @@ bool DPLLSolver::findNewWatch(ClauseIndex clause_idx, Literal false_lit) {
     // Find the other watched literal
     Literal other_watch = (watches.first == false_lit) ? watches.second : watches.first;
     
+    // Check other watched literal first - if it's true, we don't need a new watch
+    Value other_watch_value = getLiteralValue(other_watch);
+    if (other_watch_value == Value::TRUE) {
+        // Clause is already satisfied
+        return true;
+    }
+    
     // First pass: look for TRUE literals to watch
     for (Literal lit : clause) {
         if (lit != false_lit && lit != other_watch) {
@@ -184,7 +191,9 @@ bool DPLLSolver::findNewWatch(ClauseIndex clause_idx, Literal false_lit) {
                 auto& old_watches = (false_lit > 0) ? pos_watches[abs_false_lit] : neg_watches[abs_false_lit];
                 
                 for (size_t i = 0; i < old_watches.size(); ++i) {
-                    if (old_watches[i].clause_idx == clause_idx && old_watches[i].literal == false_lit) {
+                    if (i < old_watches.size() && // Extra safety check
+                       old_watches[i].clause_idx == clause_idx && 
+                       old_watches[i].literal == false_lit) {
                         // Replace with last element and pop
                         old_watches[i] = old_watches.back();
                         old_watches.pop_back();
@@ -211,17 +220,37 @@ bool DPLLSolver::unitPropagate() {
     std::vector<Literal> propagation_queue;
     std::vector<bool> in_queue(num_vars + 1, false);
     
-    // First, check if there are already conflicting assignments
-    for (Variable var = 1; var <= num_vars; var++) {
-        if (assignment[var] != Value::UNDEF) {
-            // Check if this assignment satisfies the clauses it's involved in
-            Literal lit = assignment[var] == Value::TRUE ? var : -var;
+    // First, check if there are already unit clauses or assigned variables
+    for (ClauseIndex i = 0; i < clauses.size(); ++i) {
+        const auto& clause = clauses[i];
+        if (clause.size() == 1) {
+            // Unit clause
+            Literal lit = clause[0];
+            Variable var = std::abs(lit);
             
-            // Add to queue if not already present
-            if (!in_queue[var]) {
-                propagation_queue.push_back(lit);
-                in_queue[var] = true;
+            if (assignment[var] == Value::UNDEF) {
+                // Unit propagation
+                assignment[var] = (lit > 0) ? Value::TRUE : Value::FALSE;
+                num_propagations++;
+                
+                if (!in_queue[var]) {
+                    propagation_queue.push_back(lit);
+                    in_queue[var] = true;
+                }
+            } else if ((lit > 0 && assignment[var] == Value::FALSE) || 
+                       (lit < 0 && assignment[var] == Value::TRUE)) {
+                // Conflict with existing assignment
+                return false;
             }
+        }
+    }
+    
+    // Add already assigned variables to the queue
+    for (Variable var = 1; var <= num_vars; var++) {
+        if (assignment[var] != Value::UNDEF && !in_queue[var]) {
+            Literal lit = (assignment[var] == Value::TRUE) ? var : -var;
+            propagation_queue.push_back(lit);
+            in_queue[var] = true;
         }
     }
     
@@ -240,8 +269,13 @@ bool DPLLSolver::unitPropagate() {
         Literal lit = propagation_queue[queue_index++];
         if (lit == 0) continue; // Safety check
         
-        // When assigning a literal to true, we need to check clauses where the negation is watched
-        auto& watches = (lit > 0) ? neg_watches[std::abs(lit)] : pos_watches[std::abs(lit)];
+        // When a literal is assigned TRUE, we need to check clauses where its negation is watched
+        // (These are the only clauses that might become unit or unsatisfiable)
+        Literal false_lit = -lit; // The literal that's now FALSE
+        Variable var = std::abs(lit);
+        
+        // Get watches for the FALSE literal - these are clauses that might become unit or conflicting
+        auto& watches = (false_lit > 0) ? pos_watches[var] : neg_watches[var];
         
         size_t i = 0;
         while (i < watches.size()) {
@@ -287,21 +321,21 @@ bool DPLLSolver::unitPropagate() {
             }
             
             // Unit propagation case: other_watch must be true
-            Variable var = std::abs(other_watch);
-            if (var > 0 && var <= num_vars) {
-                if (assignment[var] != Value::UNDEF) {
+            Variable unit_var = std::abs(other_watch);
+            if (unit_var > 0 && unit_var <= num_vars) {
+                if (assignment[unit_var] != Value::UNDEF) {
                     // Already assigned - check if consistent
-                    if ((other_watch > 0) != (assignment[var] == Value::TRUE)) {
+                    if ((other_watch > 0) != (assignment[unit_var] == Value::TRUE)) {
                         return false; // Conflict
                     }
                 } else {
                     // Assign and add to queue
-                    assignment[var] = (other_watch > 0) ? Value::TRUE : Value::FALSE;
+                    assignment[unit_var] = (other_watch > 0) ? Value::TRUE : Value::FALSE;
                     num_propagations++;
                     
-                    if (!in_queue[var]) {
+                    if (!in_queue[unit_var]) {
                         propagation_queue.push_back(other_watch);
-                        in_queue[var] = true;
+                        in_queue[unit_var] = true;
                     }
                 }
             }
@@ -373,13 +407,12 @@ bool DPLLSolver::dpll(int depth) {
     // Apply pure literal elimination
     pureLiteralEliminate();
     
-    // First, check if all clauses are satisfied with the current assignment
+    // Check if all clauses are satisfied with the current assignment
+    // We only need to check for unsatisfied clauses, not every clause
     bool allSatisfied = true;
     
     for (uint32_t i = 0; i < clauses.size(); ++i) {
-        bool clauseSatisfied = isClauseSatisfied(i);
-        
-        if (!clauseSatisfied) {
+        if (!isClauseSatisfied(i)) {
             allSatisfied = false;
             
             // Check if any clause is definitely falsified (all literals assigned but unsatisfied)
@@ -416,30 +449,46 @@ bool DPLLSolver::dpll(int depth) {
     uint32_t true_satisfied = 0;
     uint32_t false_satisfied = 0;
     
-    // Count clauses satisfied by each polarity
+    // Only count clauses that contain this variable and are not already satisfied
     for (uint32_t i = 0; i < clauses.size(); ++i) {
-        if (isClauseSatisfied(i)) continue; // Skip already satisfied clauses
+        if (isClauseSatisfied(i)) continue;
         
-        // Check if setting var to TRUE satisfies this clause
-        bool satisfied_by_true = false;
-        bool satisfied_by_false = false;
+        bool contains_pos = false;
+        bool contains_neg = false;
+        bool has_other_undefined = false;
         
         for (Literal lit : clauses[i]) {
-            Variable clause_var = std::abs(lit);
-            if (clause_var == var) {
-                // If this is our variable
+            Variable lit_var = std::abs(lit);
+            
+            if (lit_var == var) {
                 if (lit > 0) {
-                    // Positive literal is satisfied by TRUE
-                    satisfied_by_true = true;
+                    contains_pos = true;
                 } else {
-                    // Negative literal is satisfied by FALSE
-                    satisfied_by_false = true;
+                    contains_neg = true;
                 }
+            } else if (assignment[lit_var] == Value::UNDEF) {
+                has_other_undefined = true;
             }
         }
         
-        if (satisfied_by_true) true_satisfied++;
-        if (satisfied_by_false) false_satisfied++;
+        // Count clauses that would be immediately satisfied (not just those containing the variable)
+        if (contains_pos && !has_other_undefined) true_satisfied++;
+        if (contains_neg && !has_other_undefined) false_satisfied++;
+    }
+    
+    // If using watches, we can also use them to estimate satisfaction
+    for (const auto& watch : pos_watches[var]) {
+        ClauseIndex clause_idx = watch.clause_idx;
+        if (!isClauseSatisfied(clause_idx)) {
+            true_satisfied++; // Setting var to TRUE would satisfy clauses with positive watches
+        }
+    }
+    
+    for (const auto& watch : neg_watches[var]) {
+        ClauseIndex clause_idx = watch.clause_idx;
+        if (!isClauseSatisfied(clause_idx)) {
+            false_satisfied++; // Setting var to FALSE would satisfy clauses with negative watches
+        }
     }
     
     // First try the assignment that satisfies more clauses
@@ -469,8 +518,9 @@ void DPLLSolver::pureLiteralEliminate() {
     std::vector<bool> hasPositiveOccurrence(num_vars + 1, false);
     std::vector<bool> hasNegativeOccurrence(num_vars + 1, false);
     
-    // Iterate through all clauses
-    for (uint32_t i = 0; i < clauses.size(); ++i) {
+    // We need to check all clauses to be sure about pure literals
+    // Using just watch lists can miss some occurrences if a literal isn't watched
+    for (ClauseIndex i = 0; i < clauses.size(); ++i) {
         // Skip satisfied clauses
         if (isClauseSatisfied(i)) {
             continue;
@@ -513,7 +563,7 @@ void DPLLSolver::pureLiteralEliminate() {
         }
     }
     
-    // If we assigned any pure literals, try to assign more after propagation
+    // If we assigned any pure literals, propagate the new assignments
     if (assigned_pure_literal) {
         unitPropagate(); // Propagate the new assignments
     }
@@ -521,8 +571,20 @@ void DPLLSolver::pureLiteralEliminate() {
 
 // Check if a clause is satisfied under the current assignment
 bool DPLLSolver::isClauseSatisfied(uint32_t clauseIdx) const {
+    // Bounds check to avoid out-of-range access
+    if (clauseIdx >= clauses.size()) {
+        return false;
+    }
+    
     for (Literal lit : clauses[clauseIdx]) {
         Variable var = std::abs(lit);
+        
+        // Check for out-of-bounds access
+        if (var == 0 || var >= assignment.size()) {
+            continue;
+        }
+        
+        // A clause is satisfied if at least one literal is TRUE
         if ((lit > 0 && assignment[var] == Value::TRUE) || 
             (lit < 0 && assignment[var] == Value::FALSE)) {
             return true;
