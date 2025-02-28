@@ -6,6 +6,7 @@
 #include "dpll.h"
 using Literal = int32_t;
 using Variable = uint32_t;
+using ClauseIndex = uint32_t;
 
 DPLLSolver::DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses) {
     clauses = input_clauses;
@@ -20,22 +21,137 @@ DPLLSolver::DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses) {
     }
 
     assignment.resize(num_vars + 1, Value::UNDEF);
-    pos_occurrences.resize(num_vars + 1);
-    neg_occurrences.resize(num_vars + 1);
+    pos_watches.resize(num_vars + 1);
+    neg_watches.resize(num_vars + 1);
+    clause_watches.resize(clauses.size());
 
-    for (uint32_t i = 0; i < clauses.size(); ++i) {
-        for (Literal literal : clauses[i]) {
-            Variable var = std::abs(literal);
-            if (literal > 0) {
-                pos_occurrences[var].push_back(i);
-            } else {
-                neg_occurrences[var].push_back(i);
+    initWatches();
+    num_decisions = 0;
+    num_propagations = 0;
+}
+
+void DPLLSolver::initWatches() {
+    for (ClauseIndex i = 0; i < clauses.size(); ++i) {
+        const auto& clause = clauses[i];
+        if (clause.empty()) continue;
+
+        // Watch first literal
+        addWatch(clause[0], i);
+        
+        // For unit clauses, watch the same literal twice
+        if (clause.size() == 1) {
+            addWatch(clause[0], i);
+        } else {
+            // Watch second literal for non-unit clauses
+            addWatch(clause[1], i);
+        }
+        
+        clause_watches[i] = {clause[0], clause.size() > 1 ? clause[1] : clause[0]};
+    }
+}
+
+void DPLLSolver::addWatch(Literal lit, ClauseIndex clause_idx) {
+    if (lit > 0) {
+        pos_watches[lit].emplace_back(lit, clause_idx);
+    } else {
+        neg_watches[-lit].emplace_back(lit, clause_idx);
+    }
+}
+
+DPLLSolver::Value DPLLSolver::getLiteralValue(Literal lit) const {
+    DPLLSolver::Value var_value = assignment[std::abs(lit)];
+    if (var_value == DPLLSolver::Value::UNDEF) return DPLLSolver::Value::UNDEF;
+    return (lit > 0) == (var_value == DPLLSolver::Value::TRUE) ? DPLLSolver::Value::TRUE : DPLLSolver::Value::FALSE;
+}
+
+bool DPLLSolver::findNewWatch(ClauseIndex clause_idx, Literal false_lit) {
+    const auto& clause = clauses[clause_idx];
+    auto& watches = clause_watches[clause_idx];
+    
+    // Find the other watched literal
+    Literal other_watch = (watches.first == false_lit) ? watches.second : watches.first;
+    
+    // Look for a new literal to watch
+    for (Literal lit : clause) {
+        if (lit != false_lit && lit != other_watch) {
+            if (getLiteralValue(lit) != Value::FALSE) {
+                // Update the watches
+                if (watches.first == false_lit) {
+                    watches.first = lit;
+                } else {
+                    watches.second = lit;
+                }
+                
+                // Remove old watch and add new one
+                addWatch(lit, clause_idx);
+                return true;
             }
         }
     }
+    
+    return false;  // No new watch found
+}
 
-    num_decisions = 0;
-    num_propagations = 0;
+bool DPLLSolver::propagateLiteral(Literal lit) {
+    // Get the watches that need to be checked
+    auto& watches = (lit > 0) ? neg_watches[lit] : pos_watches[-lit];
+    
+    size_t i = 0;
+    while (i < watches.size()) {
+        ClauseIndex clause_idx = watches[i].clause_idx;
+        Literal watch_lit = watches[i].literal;
+        
+        // Try to find new watch
+        if (findNewWatch(clause_idx, watch_lit)) {
+            // Remove this watch since we found a new one
+            watches[i] = watches.back();
+            watches.pop_back();
+            continue;
+        }
+        
+        // Get the other watch
+        auto& clause_watch = clause_watches[clause_idx];
+        Literal other_watch = (watch_lit == clause_watch.first) ? 
+                            clause_watch.second : clause_watch.first;
+        
+        // Check the other watched literal
+        Value other_value = getLiteralValue(other_watch);
+        if (other_value == Value::TRUE) {
+            // Clause is satisfied
+            i++;
+            continue;
+        }
+        
+        if (other_value == Value::FALSE) {
+            // Conflict detected
+            return false;
+        }
+        
+        // Unit propagation case
+        Variable var = std::abs(other_watch);
+        assignment[var] = (other_watch > 0) ? Value::TRUE : Value::FALSE;
+        num_propagations++;
+        
+        if (!propagateLiteral(other_watch)) {
+            return false;
+        }
+        
+        i++;
+    }
+    
+    return true;
+}
+
+bool DPLLSolver::unitPropagate() {
+    for (Variable var = 1; var <= num_vars; var++) {
+        if (assignment[var] != Value::UNDEF) {
+            Literal lit = assignment[var] == Value::TRUE ? var : -var;
+            if (!propagateLiteral(lit)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
@@ -89,55 +205,6 @@ bool DPLLSolver::dpll() {
     return false;
 }
 
-// Unit propagation
-bool DPLLSolver::unitPropagate() {
-    bool found = true;
-    while (found) {
-        found = false;
-        
-        for (uint32_t i = 0; i < clauses.size(); ++i) {
-            // Skip satisfied clauses
-            if (isClauseSatisfied(i)) {
-                continue;
-            }
-            
-            // Check if it's a unit clause
-            int unassignedCount = 0;
-            Literal unassignedLit = 0;
-            
-            for (Literal lit : clauses[i]) {
-                Variable var = std::abs(lit);
-                
-                if (assignment[var] == Value::UNDEF) {
-                    unassignedCount++;
-                    unassignedLit = lit;
-                } else if ((lit > 0 && assignment[var] == Value::TRUE) || 
-                          (lit < 0 && assignment[var] == Value::FALSE)) {
-                    // Literal is satisfied
-                    unassignedCount = -1; // Mark clause as satisfied
-                    break;
-                }
-            }
-            
-            if (unassignedCount == 0) {
-                // All literals are false -> conflict
-                return false;
-            } else if (unassignedCount == 1) {
-                // Unit clause found
-                Variable var = std::abs(unassignedLit);
-                Value val = (unassignedLit > 0) ? Value::TRUE : Value::FALSE;
-                
-                assignment[var] = val;
-                num_propagations++;
-                found = true; // Continue propagating
-                break; // Restart the loop since assignments changed
-            }
-        }
-    }
-    
-    return true;
-}
-
 // Pure literal elimination
 void DPLLSolver::pureLiteralEliminate() {
     for (Variable var = 1; var <= num_vars; ++var) {
@@ -149,16 +216,16 @@ void DPLLSolver::pureLiteralEliminate() {
         bool appearsNegative = false;
         
         // Check positive occurrences
-        for (uint32_t clauseIdx : pos_occurrences[var]) {
-            if (!isClauseSatisfied(clauseIdx)) {
+        for (const Watch& watch : pos_watches[var]) {
+            if (!isClauseSatisfied(watch.clause_idx)) {
                 appearsPositive = true;
                 break;
             }
         }
         
         // Check negative occurrences
-        for (uint32_t clauseIdx : neg_occurrences[var]) {
-            if (!isClauseSatisfied(clauseIdx)) {
+        for (const Watch& watch : neg_watches[var]) {
+            if (!isClauseSatisfied(watch.clause_idx)) {
                 appearsNegative = true;
                 break;
             }

@@ -2,34 +2,45 @@
 #include <vector>
 #include <cstdint>
 
-using Literal = int32_t;
-using Variable = uint32_t;
-
-enum class Value : uint8_t {
-    FALSE = 0,
-    TRUE = 1,
-    UNDEF = 2
-};
-
 class DPLLSolver {
 public:
-    DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses);
-    std::pair<bool, std::vector<Literal>> solve();
+    DPLLSolver(const std::vector<std::vector<int32_t>>& clauses);
+    std::pair<bool, std::vector<int32_t>> solve();
     uint32_t getNumDecisions() const;
     uint32_t getNumPropagations() const;
+
 private:
-    std::vector<std::vector<Literal>> clauses;
+    enum class Value { FALSE, TRUE, UNDEF };
+    
+    struct Watch {
+        int32_t literal;
+        uint32_t clause_idx;
+        
+        Watch(int32_t lit, uint32_t idx) : literal(lit), clause_idx(idx) {}
+    };
+
+    std::vector<std::vector<int32_t>> clauses;
     std::vector<Value> assignment;
-    std::vector<std::vector<uint32_t>> pos_occurrences;
-    std::vector<std::vector<uint32_t>> neg_occurrences;
     uint32_t num_vars;
     uint32_t num_decisions;
     uint32_t num_propagations;
+
+    // Watched literals data structures
+    std::vector<std::vector<Watch>> pos_watches;  // Watches for positive literals
+    std::vector<std::vector<Watch>> neg_watches;  // Watches for negative literals
+    std::vector<std::pair<int32_t, int32_t>> clause_watches;  // Which literals we're watching in each clause
 
     bool dpll();
     bool unitPropagate();
     void pureLiteralEliminate();
     bool isClauseSatisfied(uint32_t clauseIdx) const;
     bool allClausesSatisfied() const;
-    Variable pickBranchVariable();
-}; 
+    uint32_t pickBranchVariable();
+    
+    // New helper methods for watched literals
+    void initWatches();
+    bool findNewWatch(uint32_t clause_idx, int32_t false_lit);
+    void addWatch(int32_t lit, uint32_t clause_idx);
+    bool propagateLiteral(int32_t lit);
+    Value getLiteralValue(int32_t lit) const;
+};
