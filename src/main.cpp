@@ -54,9 +54,9 @@ int main(int argc, char* argv[]) {
         std::vector<std::vector<int>> clauses = parse_cnf_file(input_file);
         
         // Create and run solver
-        DPLLSolver solver(clauses);
         
         auto start_time = std::chrono::high_resolution_clock::now();
+        DPLLSolver solver(clauses);
         auto [is_sat, assignment] = solver.solve();
         auto end_time = std::chrono::high_resolution_clock::now();
         

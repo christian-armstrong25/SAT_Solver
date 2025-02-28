@@ -2,6 +2,7 @@
 #include <vector>
 #include <unordered_map>
 #include <iostream>
+#include <unordered_set>
 
 #include "dpll.h"
 using Literal = int32_t;
@@ -9,17 +10,45 @@ using Variable = uint32_t;
 using ClauseIndex = uint32_t;
 
 DPLLSolver::DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses) {
-    clauses = input_clauses;
-
-    // Initialize variables
-    num_vars = 0;
-    for (const auto& clause : clauses) {
-        for (Literal literal : clause) {
-            Variable var = std::abs(literal);
-            num_vars = std::max(num_vars, var);
+    // Create a mapping from original variables to sequential indices
+    std::unordered_set<Variable> unique_vars;
+    
+    // Collect all variables
+    for (const auto& clause : input_clauses) {
+        for (Literal lit : clause) {
+            Variable var = std::abs(lit);
+            unique_vars.insert(var);
         }
     }
+    
+    // Create mappings
+    idx_to_var.push_back(0); // Add dummy at index 0, since our variables start at 1
+    uint32_t next_idx = 1;   // Start with index 1
+    
+    for (Variable var : unique_vars) {
+        var_to_idx[var] = next_idx;
+        idx_to_var.push_back(var);
+        next_idx++;
+    }
+    
+    // Map clauses using our variable mapping
+    std::vector<std::vector<Literal>> mapped_clauses;
+    for (const auto& clause : input_clauses) {
+        std::vector<Literal> mapped_clause;
+        for (Literal lit : clause) {
+            Variable var = std::abs(lit);
+            Literal mapped_lit = (lit > 0) ? var_to_idx[var] : -var_to_idx[var];
+            mapped_clause.push_back(mapped_lit);
+        }
+        mapped_clauses.push_back(mapped_clause);
+    }
+    
+    // When initialized, first look for tautologies and remove them
+    clauses = removeTautologies(mapped_clauses);
 
+    // Initialize variables using the number of mapped variables
+    num_vars = idx_to_var.size() - 1; // Subtract 1 for the dummy at index 0
+    
     assignment.resize(num_vars + 1, Value::UNDEF);
     pos_watches.resize(num_vars + 1);
     neg_watches.resize(num_vars + 1);
@@ -28,6 +57,29 @@ DPLLSolver::DPLLSolver(const std::vector<std::vector<Literal>>& input_clauses) {
     initWatches();
     num_decisions = 0;
     num_propagations = 0;
+}
+
+std::vector<std::vector<Literal>> DPLLSolver::removeTautologies(const std::vector<std::vector<Literal>>& input_clauses) {
+    std::vector<std::vector<Literal>> filtered_clauses;
+    for (const auto& clause : input_clauses) {
+        if (clause.empty()) continue;
+        std::unordered_set<Literal> clause_set(clause.begin(), clause.end());
+        bool has_contradiction = false;
+
+        for (Literal lit : clause) {
+            if (clause_set.count(-lit)) {
+                has_contradiction = true;
+                std::cout << "Tautology found and removed: ";
+                break;
+            }
+        }
+
+        if (!has_contradiction) {
+            filtered_clauses.push_back(clause);
+        }
+    }
+
+    return filtered_clauses;
 }
 
 void DPLLSolver::initWatches() {
@@ -53,10 +105,9 @@ void DPLLSolver::initWatches() {
 void DPLLSolver::addWatch(Literal lit, ClauseIndex clause_idx) {
     Variable var = std::abs(lit);
     if (var == 0 || var > num_vars || clause_idx >= clauses.size()) {
-        return; // Invalid variable or clause index
+        return;
     }
     
-    // Make sure we're watching the literal itself, not just the variable
     if (lit > 0) {
         pos_watches[var].emplace_back(lit, clause_idx);
     } else {
@@ -277,10 +328,12 @@ std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
         }
     }
     
-    // Build the result
+    // Build the result and map back to original variable IDs
     std::vector<Literal> result;
     for (Variable var = 1; var <= num_vars; ++var) {
-        result.push_back(assignment[var] == Value::TRUE ? var : -var);
+        // Map the internal variable index back to the original variable ID
+        Variable original_var = idx_to_var[var];
+        result.push_back(assignment[var] == Value::TRUE ? original_var : -original_var);
     }
     
     // Verify solution is correct
@@ -505,47 +558,79 @@ bool DPLLSolver::allClausesSatisfied() const {
     return all_clauses_satisfied && all_vars_assigned;
 }
 
-// Simple heuristic to choose a variable
 Variable DPLLSolver::pickBranchVariable() {
-    // Use VSIDS-like heuristic: pick variable that appears most frequently in unsatisfied clauses
-    std::vector<uint32_t> varScores(num_vars + 1, 0);
+    // First identify minimum size of unsatisfied clauses and track literal occurrences in one pass
+    uint32_t min_size = UINT32_MAX;
+    std::vector<std::vector<uint32_t>> counts(2, std::vector<uint32_t>(num_vars + 1, 0));
+    Variable first_unassigned = 0;
     
-    // Count variable occurrences in unsatisfied clauses
+    // First pass - find minimum size
     for (uint32_t i = 0; i < clauses.size(); ++i) {
-        if (!isClauseSatisfied(i)) {
-            // Only consider unsatisfied clauses
+        if (isClauseSatisfied(i)) continue;
+        
+        // Count unassigned literals
+        uint32_t unassigned_count = 0;
+        for (Literal lit : clauses[i]) {
+            Variable var = std::abs(lit);
+            if (assignment[var] == Value::UNDEF) {
+                unassigned_count++;
+                // Keep track of first unassigned variable as fallback
+                if (first_unassigned == 0) first_unassigned = var;
+            }
+        }
+        
+        if (unassigned_count > 0) {
+            min_size = std::min(min_size, unassigned_count);
+        }
+    }
+    
+    // No unsatisfied clauses or all variables assigned
+    if (min_size == UINT32_MAX) return first_unassigned;
+    
+    // Second pass - collect counts only for minimum-sized clauses
+    for (uint32_t i = 0; i < clauses.size(); ++i) {
+        if (isClauseSatisfied(i)) continue;
+        
+        // Check if this is a minimum-sized clause
+        uint32_t unassigned_count = 0;
+        for (Literal lit : clauses[i]) {
+            if (assignment[std::abs(lit)] == Value::UNDEF) {
+                unassigned_count++;
+            }
+        }
+        
+        if (unassigned_count == min_size) {
+            // Count occurrences in minimum clauses
             for (Literal lit : clauses[i]) {
                 Variable var = std::abs(lit);
                 if (assignment[var] == Value::UNDEF) {
-                    varScores[var]++; // Increment score for unassigned variables
+                    // Index 0 for negative, 1 for positive
+                    int idx = (lit > 0) ? 1 : 0;
+                    counts[idx][var]++;
                 }
             }
         }
     }
     
-    // Find variable with highest score
-    Variable bestVar = 0;
-    uint32_t bestScore = 0;
+    // Compute MOM's scores and find best variable
+    Variable best_var = 0;
+    uint32_t best_score = 0;
+    const uint32_t k = 1; // Weight parameter
     
     for (Variable var = 1; var <= num_vars; ++var) {
-        if (assignment[var] == Value::UNDEF && varScores[var] > bestScore) {
-            bestScore = varScores[var];
-            bestVar = var;
-        }
-    }
-    
-    // If no variables had a score (all clauses satisfied or formula unsatisfiable),
-    // find any unassigned variable
-    if (bestVar == 0) {
-        for (Variable var = 1; var <= num_vars; ++var) {
-            if (assignment[var] == Value::UNDEF) {
-                bestVar = var;
-                break;
+        if (assignment[var] == Value::UNDEF) {
+            uint32_t neg = counts[0][var];
+            uint32_t pos = counts[1][var];
+            uint32_t score = (pos * neg) * (1 << k) + pos + neg;
+            
+            if (score > best_score) {
+                best_score = score;
+                best_var = var;
             }
         }
     }
     
-    return bestVar; // Returns 0 if no unassigned variable found
+    return best_var != 0 ? best_var : first_unassigned;
 }
 
 // Stats accessors
