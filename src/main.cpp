@@ -61,6 +61,7 @@ int main(int argc, char* argv[]) {
         auto end_time = std::chrono::high_resolution_clock::now();
         
         std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+        elapsed_seconds = std::chrono::duration<double>(std::round(elapsed_seconds.count() * 100.0) / 100.0);
         
         std::string result = is_sat ? "SAT" : "UNSAT";
         std::string solution_str = is_sat ? ", \"Solution\": \"" + format_solution(assignment) + "\"" : "";
