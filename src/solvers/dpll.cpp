@@ -375,7 +375,6 @@ bool DPLLSolver::dpll(int depth) {
     
     // First, check if all clauses are satisfied with the current assignment
     bool allSatisfied = true;
-    bool allAssigned = true;
     
     for (uint32_t i = 0; i < clauses.size(); ++i) {
         bool clauseSatisfied = isClauseSatisfied(i);
@@ -401,14 +400,6 @@ bool DPLLSolver::dpll(int depth) {
         }
     }
     
-    // Check if all variables are assigned
-    for (Variable var = 1; var <= num_vars; ++var) {
-        if (assignment[var] == Value::UNDEF) {
-            allAssigned = false;
-            break;
-        }
-    }
-    
     if (allSatisfied) {
         return true;
     }
@@ -421,15 +412,48 @@ bool DPLLSolver::dpll(int depth) {
     
     num_decisions++;
     
-    // Try TRUE assignment first
-    assignment[var] = Value::TRUE;
+    // Greedy polarity: try the assignment that satisfies more clauses first
+    uint32_t true_satisfied = 0;
+    uint32_t false_satisfied = 0;
+    
+    // Count clauses satisfied by each polarity
+    for (uint32_t i = 0; i < clauses.size(); ++i) {
+        if (isClauseSatisfied(i)) continue; // Skip already satisfied clauses
+        
+        // Check if setting var to TRUE satisfies this clause
+        bool satisfied_by_true = false;
+        bool satisfied_by_false = false;
+        
+        for (Literal lit : clauses[i]) {
+            Variable clause_var = std::abs(lit);
+            if (clause_var == var) {
+                // If this is our variable
+                if (lit > 0) {
+                    // Positive literal is satisfied by TRUE
+                    satisfied_by_true = true;
+                } else {
+                    // Negative literal is satisfied by FALSE
+                    satisfied_by_false = true;
+                }
+            }
+        }
+        
+        if (satisfied_by_true) true_satisfied++;
+        if (satisfied_by_false) false_satisfied++;
+    }
+    
+    // First try the assignment that satisfies more clauses
+    bool try_true_first = (true_satisfied >= false_satisfied);
+    
+    // Try first polarity
+    assignment[var] = try_true_first ? Value::TRUE : Value::FALSE;
     if (dpll(depth + 1)) {
         return true;
     }
     
-    // Restore state and try FALSE assignment
+    // Restore state and try opposite polarity
     assignment = saved_assignment;
-    assignment[var] = Value::FALSE;
+    assignment[var] = try_true_first ? Value::FALSE : Value::TRUE;
     if (dpll(depth + 1)) {
         return true;
     }
