@@ -183,7 +183,6 @@ bool DPLLSolver::unitPropagate() {
         iteration_count++;
         
         if (iteration_count >= MAX_ITERATIONS) {
-            std::cout << "WARNING: Unit propagation reached iteration limit." << std::endl;
             return false;
         }
         
@@ -265,7 +264,6 @@ bool DPLLSolver::unitPropagate() {
 
 std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
     bool is_sat = dpll();
-    std::cout << "is_sat: " << is_sat << std::endl;
     
     if (!is_sat) {
         return {false, std::vector<Literal>()};
@@ -275,7 +273,6 @@ std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
     for (Variable var = 1; var <= num_vars; ++var) {
         if (assignment[var] == Value::UNDEF) {
             // Assign any remaining unassigned variables arbitrarily
-            std::cout << "Assigning unassigned variable " << var << " to TRUE for complete solution" << std::endl;
             assignment[var] = Value::TRUE;
         }
     }
@@ -298,26 +295,17 @@ std::pair<bool, std::vector<Literal>> DPLLSolver::solve() {
             }
         }
         if (!clause_satisfied) {
-            std::cout << "ERROR: Solution verification failed!" << std::endl;
             return {false, std::vector<Literal>()};
         }
     }
     
-    std::cout << "Solution verified successfully!" << std::endl;
     return {true, result};
 }
 
 bool DPLLSolver::dpll(int depth) {
     // Bail out check for excessive recursion
     if (depth > 1000) {
-        std::cout << "Exceeded max recursion depth!" << std::endl;
         return false;
-    }
-    
-    // Logging
-    if (depth % 10 == 0) {
-        std::cout << "DPLL depth: " << depth << ", decisions: " << num_decisions 
-                  << ", propagations: " << num_propagations << std::endl;
     }
     
     // Save the current assignment state
@@ -325,9 +313,6 @@ bool DPLLSolver::dpll(int depth) {
     
     // Try unit propagation
     if (!unitPropagate()) {
-        if (depth < 5) {
-            std::cout << "Conflict detected during unit propagation at depth " << depth << std::endl;
-        }
         assignment = saved_assignment;  // Restore state
         return false;
     }
@@ -357,9 +342,6 @@ bool DPLLSolver::dpll(int depth) {
             
             if (!hasPotentialToSatisfy) {
                 // Found a falsified clause
-                if (depth < 5) {
-                    std::cout << "Clause " << i << " is definitely falsified at depth " << depth << std::endl;
-                }
                 assignment = saved_assignment;
                 return false;
             }
@@ -374,48 +356,25 @@ bool DPLLSolver::dpll(int depth) {
         }
     }
     
-    // If all clauses are satisfied and all variables are assigned, we found a solution
-    if (allSatisfied && allAssigned) {
-        std::cout << "Complete solution found at depth " << depth << std::endl;
-        return true;
-    }
-    
-    // If all clauses are satisfied but some variables are unassigned,
-    // we can still return true as the formula is satisfiable
     if (allSatisfied) {
-        std::cout << "All clauses satisfied at depth " << depth << " but " 
-                  << (num_vars - std::count(assignment.begin(), assignment.end(), Value::UNDEF))
-                  << " of " << num_vars << " variables assigned" << std::endl;
-                  
-        // We'll leave the remaining variables unassigned and let the solve() function
-        // assign them arbitrarily if needed
         return true;
     }
     
     // Otherwise, we need to branch
     Variable var = pickBranchVariable();
     if (var == 0) {
-        if (depth < 5) {
-            std::cout << "No variable to branch on at depth " << depth << " - formula may be unsatisfiable" << std::endl;
-        }
         return false;
     }
     
     num_decisions++;
     
     // Try TRUE assignment first
-    if (depth < 5) {
-        std::cout << "At depth " << depth << " branching on " << var << " = TRUE" << std::endl;
-    }
     assignment[var] = Value::TRUE;
     if (dpll(depth + 1)) {
         return true;
     }
     
     // Restore state and try FALSE assignment
-    if (depth < 5) {
-        std::cout << "At depth " << depth << " branching on " << var << " = FALSE" << std::endl;
-    }
     assignment = saved_assignment;
     assignment[var] = Value::FALSE;
     if (dpll(depth + 1)) {
@@ -467,13 +426,11 @@ void DPLLSolver::pureLiteralEliminate() {
         
         // If pure positive (appears only as positive)
         if (hasPositiveOccurrence[var] && !hasNegativeOccurrence[var]) {
-            std::cout << "Pure literal: assigning " << var << " to TRUE" << std::endl;
             assignment[var] = Value::TRUE;
             assigned_pure_literal = true;
         } 
         // If pure negative (appears only as negative)
         else if (!hasPositiveOccurrence[var] && hasNegativeOccurrence[var]) {
-            std::cout << "Pure literal: assigning " << var << " to FALSE" << std::endl;
             assignment[var] = Value::FALSE;
             assigned_pure_literal = true;
         }
