@@ -30,7 +30,7 @@ private:
     std::vector<std::vector<Watch>> neg_watches;  // Watches for negative literals
     std::vector<std::pair<int32_t, int32_t>> clause_watches;  // Which literals we're watching in each clause
 
-    bool dpll();
+    bool dpll(int depth = 0);
     bool unitPropagate();
     void pureLiteralEliminate();
     bool isClauseSatisfied(uint32_t clauseIdx) const;
