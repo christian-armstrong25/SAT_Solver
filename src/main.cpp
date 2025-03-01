@@ -3,8 +3,8 @@
 #include <string>
 #include <filesystem>
 #include <stdexcept>
-#include <algorithm>  // For std::sort
-#include <unordered_map>  // Added for unordered_map
+#include <algorithm>  
+#include <unordered_map> 
 
 #include "dimacs_parser.h"
 #include "solvers/dpll.h"
@@ -21,8 +21,8 @@ std::string format_solution(const std::vector<int>& assignment) {
     }
     
     std::string solution;
-
     std::vector<int> sorted_vars;
+    
     for (const auto& [var, _] : var_assignments) {
         sorted_vars.push_back(var);
     }
@@ -50,10 +50,7 @@ int main(int argc, char* argv[]) {
     const std::string filename = std::filesystem::path(input_file).filename().string();
     
     try {
-        // Parse CNF file
         std::vector<std::vector<int>> clauses = parse_cnf_file(input_file);
-        
-        // Create and run solver
         
         auto start_time = std::chrono::high_resolution_clock::now();
         DPLLSolver solver(clauses);
@@ -66,7 +63,6 @@ int main(int argc, char* argv[]) {
         std::string result = is_sat ? "SAT" : "UNSAT";
         std::string solution_str = is_sat ? ", \"Solution\": \"" + format_solution(assignment) + "\"" : "";
         
-        // Add solver statistics
         std::cout << "{\"Instance\": \"" << filename 
                   << "\", \"Time\": " << elapsed_seconds.count() 
                   << ", \"Result\": \"" << result << "\""

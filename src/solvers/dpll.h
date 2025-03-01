@@ -27,13 +27,13 @@ private:
     uint32_t num_propagations;
     
     // Variable mapping
-    std::unordered_map<int32_t, uint32_t> var_to_idx; // Original var -> sequential index
-    std::vector<int32_t> idx_to_var;                  // Sequential index -> original var
+    std::unordered_map<int32_t, uint32_t> var_to_idx;
+    std::vector<int32_t> idx_to_var;
 
     // Watched literals data structures
-    std::vector<std::vector<Watch>> pos_watches;  // Watches for positive literals
-    std::vector<std::vector<Watch>> neg_watches;  // Watches for negative literals
-    std::vector<std::pair<int32_t, int32_t>> clause_watches;  // Which literals we're watching in each clause
+    std::vector<std::vector<Watch>> pos_watches;
+    std::vector<std::vector<Watch>> neg_watches;
+    std::vector<std::pair<int32_t, int32_t>> clause_watches;
 
     bool dpll(int depth = 0);
     bool unitPropagate();
@@ -42,7 +42,6 @@ private:
     bool allClausesSatisfied() const;
     uint32_t pickBranchVariable();
     
-    // New helper methods for watched literals
     void initWatches();
     bool findNewWatch(uint32_t clause_idx, int32_t false_lit);
     void addWatch(int32_t lit, uint32_t clause_idx);
