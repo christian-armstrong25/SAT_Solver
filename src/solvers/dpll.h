@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
 
 class DPLLSolver
 {
@@ -32,6 +33,10 @@ private:
     uint32_t num_decisions;
     uint32_t num_propagations;
 
+    // Variable mapping
+    std::unordered_map<int32_t, uint32_t> var_to_idx;
+    std::vector<int32_t> idx_to_var;
+
     // Watched literals data structures
     std::vector<std::vector<Watch>> pos_watches;             // Watches for positive literals
     std::vector<std::vector<Watch>> neg_watches;             // Watches for negative literals
@@ -50,4 +55,5 @@ private:
     void addWatch(int32_t lit, uint32_t clause_idx);
     bool propagateLiteral(int32_t lit);
     Value getLiteralValue(int32_t lit) const;
+    std::vector<std::vector<int32_t>> removeTautologies(const std::vector<std::vector<int32_t>> &input_clauses);
 };
